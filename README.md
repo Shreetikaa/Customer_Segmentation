@@ -3,15 +3,28 @@
 Dataset: Kaggle – [carrie1/ecommerce-data](https://www.kaggle.com/datasets/carrie1/ecommerce-data)
 (UK online retailer, Dec 2010 – Dec 2011, 541,909 rows).
 
+## Project structure
+
+```
+customer_segmentation/
+├── data/
+│   ├── online_retail.csv           # raw Kaggle dataset (541,909 rows)
+│   ├── online_retail_cleaned.csv   # cleaned transactions (392,692 rows)
+│   └── customer_segments.csv       # processed: one row per customer + segment (4,338)
+├── pipeline.py                     # cleaning, features, IQR anomalies, elbow/silhouette, K-Means
+├── app.py                          # Streamlit dashboard
+├── requirements.txt
+└── README.md
+```
+
 ## How to run
 
 ```
-cd ~/Desktop/customer_segmentation
 pip3 install -r requirements.txt
-streamlit run app.py
+python3 pipeline.py        # creates the cleaned and processed CSVs in data/
+streamlit run app.py       # opens the dashboard
 ```
-The app reads `data.csv.zip` (or `data.csv`) from this folder.
-To run only the analysis: `python3 pipeline.py` → writes `customer_segments.csv`.
+(The app also creates the cleaned and processed CSVs automatically if they are missing.)
 
 ## Method
 

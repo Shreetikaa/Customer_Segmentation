@@ -8,7 +8,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from pipeline import ANOMALY_GROUPS, FEATURES, LABELS, load_data, run_pipeline
+from pipeline import (ANOMALY_GROUPS, CLEANED_PATH, FEATURES, LABELS, PROCESSED_PATH,
+                      find_raw_data, load_data, run_pipeline, save_outputs)
 
 st.set_page_config(page_title="Customer Segmentation", page_icon="🛒", layout="wide")
 
@@ -60,19 +61,19 @@ def get_results(_df, k, data_key):
     return run_pipeline(_df, k=k)
 
 
-if os.path.exists("data.csv"):
-    data_path = "data.csv"
-elif os.path.exists("data.csv.zip"):
-    data_path = "data.csv.zip"      # pandas reads the zipped CSV directly
-else:
+data_path = find_raw_data()          # data/online_retail.csv
+if data_path is None:
     st.title("🛒 Customer Segmentation & Anomaly Detection")
-    st.info("Put **data.csv** (from Kaggle: carrie1/ecommerce-data) next to app.py.")
+    st.info("Put the Kaggle file (carrie1/ecommerce-data) in the **data/** folder as **online_retail.csv**.")
     st.stop()
 df = get_data(data_path)
 
 # ---------------- sidebar ----------------
 st.sidebar.title("⚙️ Settings")
 auto = get_results(df, None, data_path)
+# write the cleaned and processed CSVs into data/ the first time the app runs
+if not (os.path.exists(CLEANED_PATH) and os.path.exists(PROCESSED_PATH)):
+    save_outputs(auto)
 rec_k = auto["recommendation"]["recommended_k"]
 use_auto = st.sidebar.checkbox(f"Use recommended K ({rec_k})", value=True)
 k = rec_k if use_auto else st.sidebar.slider("Number of clusters (K)", 2, 10, rec_k)

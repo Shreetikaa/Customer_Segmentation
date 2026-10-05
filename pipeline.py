@@ -13,9 +13,65 @@ Steps (all methods from the course):
 4. Choose K with the Elbow method and Silhouette score (Week 4 - evaluation metrics)
 5. K-Means clustering on the normal customers (Week 4)
 """
+import os
+import shutil
+import zipfile
+
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+
+# ---------------- data folder ----------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+RAW_PATH = os.path.join(DATA_DIR, "online_retail.csv")                # raw Kaggle data
+CLEANED_PATH = os.path.join(DATA_DIR, "online_retail_cleaned.csv")    # cleaned data
+PROCESSED_PATH = os.path.join(DATA_DIR, "customer_segments.csv")      # processed result
+
+# files from the earlier layout (moved into data/ automatically)
+OLD_ZIP = os.path.join(BASE_DIR, "data.csv.zip")
+OLD_CSV = os.path.join(BASE_DIR, "data.csv")
+OLD_RESULTS = os.path.join(BASE_DIR, "customer_segments.csv")
+
+
+def setup_data_folders():
+    """
+    One-time tidy-up: create data/ and put the raw dataset at data/online_retail.csv
+    (unzipping data.csv.zip if needed). Old copies are removed once it is safely there.
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(RAW_PATH):
+        if os.path.exists(OLD_CSV):
+            os.replace(OLD_CSV, RAW_PATH)
+        elif os.path.exists(OLD_ZIP):
+            with zipfile.ZipFile(OLD_ZIP) as z:
+                name = [n for n in z.namelist() if n.endswith(".csv")][0]
+                with z.open(name) as src, open(RAW_PATH, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+    if os.path.exists(RAW_PATH) and os.path.getsize(RAW_PATH) > 0:
+        for old in (OLD_ZIP, OLD_CSV, OLD_RESULTS,
+                    os.path.join(DATA_DIR, "processed", "customer_segments.csv")):
+            if os.path.exists(old):
+                os.remove(old)
+        for sub in ("raw", "cleaned", "processed"):      # empty leftover sub-folders
+            p = os.path.join(DATA_DIR, sub)
+            if os.path.isdir(p) and not os.listdir(p):
+                os.rmdir(p)
+
+
+def find_raw_data():
+    """Return data/online_retail.csv (setting up the data folder first if needed)."""
+    setup_data_folders()
+    return RAW_PATH if os.path.exists(RAW_PATH) else None
+
+
+def save_outputs(out):
+    """Save cleaned transactions and customer segments into data/."""
+    os.makedirs(os.path.dirname(CLEANED_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(PROCESSED_PATH), exist_ok=True)
+    out["transactions"].to_csv(CLEANED_PATH, index=False)
+    out["customers"].to_csv(PROCESSED_PATH)
+
 
 FEATURES = ["Days_Since_Last_Purchase", "Number_of_Orders", "Total_Spend"]
 OUTLIER_FEATURES = ["Number_of_Orders", "Total_Spend"]
@@ -186,14 +242,19 @@ def run_pipeline(df, k=None):
 
 
 if __name__ == "__main__":
-    import os
-    path = "data.csv" if os.path.exists("data.csv") else "data.csv.zip"
-    out = run_pipeline(load_data(path))
+    # Run the full pipeline and save the cleaned and processed data
+    raw = find_raw_data()
+    if raw is None:
+        raise SystemExit("Raw data not found: put the Kaggle file in data/ as online_retail.csv")
+    print("Reading raw data from", raw)
+    out = run_pipeline(load_data(raw))
+
     print(out["iqr_bounds"].round(1))
     print(out["k_scores"].round(3).to_string(index=False))
     print(out["recommendation"], "-> K =", out["k"], "| silhouette =", round(out["silhouette"], 3))
     c = out["customers"]
     print(c.groupby("Segment")[FEATURES].agg(["mean", "count"]).round(1).to_string())
-    print(c["AnomalyGroup"].value_counts())
-    c.to_csv("customer_segments.csv")
-    print("saved customer_segments.csv")
+
+    save_outputs(out)
+    print(f"saved cleaned data   -> {CLEANED_PATH} ({len(out['transactions']):,} rows)")
+    print(f"saved processed data -> {PROCESSED_PATH} ({len(c):,} customers)")
