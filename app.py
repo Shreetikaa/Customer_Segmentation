@@ -49,8 +49,13 @@ def get_data(path):
 
 
 @st.cache_data(show_spinner="Running winsorization, K-Means and DBSCAN…")
-def get_results(_df, scaler, data_key):
-    return run_pipeline(_df, scaler=scaler)
+def get_results(_df, data_key):
+    out = run_pipeline(_df)
+    # keep data/ up to date: processed results every run, cleaned data only if missing
+    out["customers"].to_csv(PROCESSED_PATH)
+    if not os.path.exists(CLEANED_PATH):
+        save_outputs(out)
+    return out
 
 
 data_path = find_raw_data()          # data/online_retail.csv
@@ -62,15 +67,9 @@ df = get_data(data_path)
 
 # ---------------- sidebar ----------------
 st.sidebar.title("⚙️ Settings")
-scaler = st.sidebar.radio("Normalisation", ["MinMax", "Standard"],
-                          format_func=lambda s: f"{s}Scaler",
-                          help="MinMaxScaler puts every feature between 0 and 1. "
-                               "StandardScaler gives every feature mean 0 and standard deviation 1.")
+st.sidebar.markdown("**Normalisation:** MinMaxScaler")
 st.sidebar.markdown("**Number of clusters:** K = 3 (fixed)")
-res = get_results(df, scaler, data_path)
-# write the cleaned and processed CSVs into data/ the first time the app runs
-if not (os.path.exists(CLEANED_PATH) and os.path.exists(PROCESSED_PATH)):
-    save_outputs(get_results(df, "MinMax", data_path))
+res = get_results(df, data_path)
 
 cust = res["customers"]
 anom = cust[cust["IsAnomaly"]]
@@ -78,7 +77,7 @@ anom_groups = [g for g in ANOM_ORDER if g in set(anom["AnomalyGroup"])]
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Steps: clean data → customer features → winsorization (1st–99th percentile) → "
-                   f"{scaler}Scaler → K-Means (K = 3) · DBSCAN for anomalies")
+                   "MinMaxScaler → K-Means (K = 3) · DBSCAN for anomalies")
 
 # ---------------- header ----------------
 st.title("🛒 Customer Segmentation & Anomaly Detection")
@@ -109,22 +108,51 @@ with tabs[0]:
     st.dataframe(res["winsor_caps"].rename(index=LABELS).style.format(
         {"Lower cap (1st percentile)": "{:,.1f}", "Upper cap (99th percentile)": "{:,.1f}",
          "Customers capped": "{:,.0f}"}), width="stretch")
-    feat = st.radio("Show feature", FEATURES, format_func=LABELS.get, horizontal=True, key="wfeat")
-    before_after = pd.concat([
-        pd.DataFrame({"Value": cust[feat], "Data": "Before winsorization"}),
-        pd.DataFrame({"Value": res["capped"][feat], "Data": "After winsorization"})])
-    st.plotly_chart(px.box(before_after, x="Data", y="Value", color="Data",
-                           color_discrete_sequence=["#9E9E9E", "#1565C0"],
-                           labels={"Value": LABELS[feat], "Data": ""},
-                           title=f"{LABELS[feat]}: before vs after winsorization")
-                    .update_layout(showlegend=False), width="stretch")
+    feat = st.radio("Show feature", FEATURES, index=2, format_func=LABELS.get,
+                    horizontal=True, key="wfeat")
+    before, after = cust[feat], res["capped"][feat]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Max before", f"{before.max():,.0f}")
+    m2.metric("Max after", f"{after.max():,.0f}",
+              delta=f"{after.max() - before.max():,.0f}", delta_color="off")
+    m3.metric("Customers capped", f"{int((before != after).sum()):,}")
+    a, b = st.columns(2)          # separate charts, each with its own y-axis
+    a.plotly_chart(px.box(y=before, points="outliers", color_discrete_sequence=["#9E9E9E"],
+                          labels={"y": LABELS[feat]}, title="Before winsorization"),
+                   width="stretch")
+    b.plotly_chart(px.box(y=after, points="outliers", color_discrete_sequence=["#1565C0"],
+                          labels={"y": LABELS[feat]}, title="After winsorization"),
+                   width="stretch")
+    st.caption("Each chart has its own scale. Before: a few extreme customers stretch the axis and "
+               "squash everyone else. After: values above the 99th percentile are capped, so the "
+               "box and whiskers are visible. Days since last purchase changes very little "
+               "(374 → 369) because its values are not very extreme.")
 
-    st.subheader("3. Normalisation")
-    st.markdown(f"After winsorization the features are scaled with **{scaler}Scaler**, so that "
-                "days (1–369), orders (1–30) and spend (£52–£19,780) count **equally** in K-Means. "
-                "Without it, spend would dominate only because its numbers are bigger.")
-    st.dataframe(res["scaled"].rename(columns=LABELS).describe().loc[["mean", "std", "min", "max"]]
-                 .round(3), width="stretch")
+    st.subheader("3. Normalisation – MinMaxScaler")
+    st.markdown("After winsorization every feature is scaled with **MinMaxScaler**: "
+                "**(value − min) ÷ (max − min)**, so every feature goes from **0 to 1**. "
+                "Days (1–369), orders (1–30) and spend (£52–£19,780) then count **equally** in "
+                "K-Means. Without it, spend would dominate only because its numbers are bigger.")
+    ranges = pd.DataFrame({
+        "Min before": res["capped"].min(), "Max before": res["capped"].max(),
+        "Min after": res["scaled"].min(), "Max after": res["scaled"].max()}).rename(index=LABELS)
+    st.dataframe(ranges.style.format({"Min before": "{:,.1f}", "Max before": "{:,.1f}",
+                                      "Min after": "{:.1f}", "Max after": "{:.1f}"}),
+                 width="stretch")
+    short = {"Days_Since_Last_Purchase": "Days since last purchase",
+             "Number_of_Orders": "Number of orders", "Total_Spend": "Total spend"}
+    long_before = res["capped"].rename(columns=short).melt(var_name="Feature", value_name="Value")
+    long_after = res["scaled"].rename(columns=short).melt(var_name="Feature", value_name="Value")
+    a, b = st.columns(2)
+    a.plotly_chart(px.box(long_before, x="Feature", y="Value", color="Feature",
+                          title="Before normalisation (winsorized values)")
+                   .update_layout(showlegend=False, xaxis_title=None), width="stretch")
+    b.plotly_chart(px.box(long_after, x="Feature", y="Value", color="Feature",
+                          title="After normalisation (MinMaxScaler, 0 – 1)")
+                   .update_layout(showlegend=False, xaxis_title=None), width="stretch")
+    st.caption("Before: spend (up to about £20,000) is so much bigger that days and orders look "
+               "like flat lines at 0, so K-Means distances would be decided by spend alone. "
+               "After: all 3 features are on the same 0 – 1 scale and can be compared fairly.")
 
 # ---------------- tab 2: choosing K ----------------
 with tabs[1]:
@@ -150,7 +178,7 @@ with tabs[1]:
         + ("(the highest of all K)." if best_sil == 3 else f"(the highest is at K = {best_sil}, "
            "but that gives fewer, less useful groups).")
     )
-    st.caption(f"Computed on winsorized, {scaler}-scaled features.")
+    st.caption("Computed on winsorized, MinMax-scaled features.")
 
 # ---------------- tab 3: clusters ----------------
 with tabs[2]:
@@ -209,7 +237,7 @@ with tabs[3]:
     st.markdown(
         "**DBSCAN** (Density-Based Spatial Clustering of Applications with Noise) groups customers "
         "that sit in **dense areas**. A customer with too few neighbours nearby belongs to no dense "
-        "area and is labelled **noise**; these are our anomalies. It runs on the standardised "
+        "area and is labelled **noise**; these are our anomalies. It runs on the MinMax-scaled "
         "features **before** winsorization, so the extreme values are still visible to it.")
     a, b, c, d = st.columns(4)
     a.metric("eps (neighbourhood radius)", f"{res['eps']:.3f}")

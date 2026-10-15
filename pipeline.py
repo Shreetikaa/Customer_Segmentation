@@ -10,9 +10,9 @@ Steps:
    - Total_Spend
 3. Winsorization: cap each feature at its 1st and 99th percentile so extreme
    customers cannot distort K-Means
-4. Normalisation: MinMaxScaler (or StandardScaler) so all 3 features count equally
+4. Normalisation with MinMaxScaler (every feature between 0 and 1) so all 3 features count equally
 5. K-Means with K = 3 (checked with the elbow method and silhouette score)
-6. Anomaly detection with DBSCAN: customers in no dense region (noise) are anomalies,
+6. Anomaly detection with DBSCAN (MinMax-scaled, not winsorized): noise = anomalies,
    then grouped into 4 anomaly groups by what makes them unusual
 """
 import os
@@ -24,7 +24,7 @@ import pandas as pd
 from sklearn.cluster import DBSCAN, KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.neighbors import NearestNeighbors
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 
 # ---------------- data folder ----------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -139,10 +139,10 @@ def winsorize(features, limits=WINSOR_LIMITS):
 
 
 # ---------------- step 4: normalisation ----------------
-def scale(features, method="MinMax"):
-    """MinMaxScaler -> every feature between 0 and 1; StandardScaler -> mean 0, standard deviation 1."""
-    scaler = MinMaxScaler() if method == "MinMax" else StandardScaler()
-    return pd.DataFrame(scaler.fit_transform(features), index=features.index, columns=features.columns)
+def scale(features):
+    """MinMaxScaler: (value - min) / (max - min), so every feature is between 0 and 1."""
+    scaled = MinMaxScaler().fit_transform(features)
+    return pd.DataFrame(scaled, index=features.index, columns=features.columns)
 
 
 # ---------------- step 5: checking K + K-Means ----------------
@@ -199,10 +199,10 @@ def knee_eps(dist):
 
 def dbscan_anomalies(features, min_samples=DBSCAN_MIN_SAMPLES):
     """
-    DBSCAN on the standardised (not winsorized) features.
+    DBSCAN on the MinMax-scaled features before winsorization (so extreme values stay visible).
     Customers that are not in any dense region get label -1 = noise = anomaly.
     """
-    X = StandardScaler().fit_transform(features)
+    X = scale(features).values
     dist = k_distance(X, min_samples)
     eps = knee_eps(dist)
     labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(X)
@@ -222,13 +222,13 @@ def anomaly_groups(features, is_anomaly):
 
 
 # ---------------- the whole pipeline ----------------
-def run_pipeline(df, scaler="MinMax", k=K):
+def run_pipeline(df, k=K):
     d = clean_data(df)                                   # step 1
     cust = build_customer_table(d)                       # step 2
     feats = cust[FEATURES]
 
     capped, caps = winsorize(feats)                      # step 3
-    X = scale(capped, scaler)                            # step 4
+    X = scale(capped)                                    # step 4
 
     scores = evaluate_k(X)                               # step 5
     km = KMeans(n_clusters=k, n_init=10, random_state=42).fit(X)
@@ -242,7 +242,7 @@ def run_pipeline(df, scaler="MinMax", k=K):
 
     return {"transactions": d, "customers": cust, "capped": capped, "scaled": X,
             "winsor_caps": caps, "k_scores": scores, "k": k, "silhouette": sil,
-            "eps": eps, "k_distance": kdist, "scaler": scaler}
+            "eps": eps, "k_distance": kdist}
 
 
 if __name__ == "__main__":
@@ -255,7 +255,7 @@ if __name__ == "__main__":
 
     print("\nWinsorization caps:\n", out["winsor_caps"].round(1))
     print("\nK scores:\n", out["k_scores"].round(3).to_string(index=False))
-    print(f"\nK = {out['k']} | silhouette = {out['silhouette']:.3f} | scaler = {out['scaler']}")
+    print(f"\nK = {out['k']} | silhouette = {out['silhouette']:.3f} | scaler = MinMaxScaler")
     print(c.groupby("Segment")[FEATURES].agg(["mean", "count"]).round(1).to_string())
     print(f"\nDBSCAN eps = {out['eps']:.3f} | anomalies = {int(c['IsAnomaly'].sum())}")
     print(c["AnomalyGroup"].value_counts().to_string())
